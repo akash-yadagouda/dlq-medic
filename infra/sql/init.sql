@@ -58,6 +58,7 @@ CREATE TABLE dbo.replay_item (
 );
 IF COL_LENGTH('dbo.replay_item', 'error_pattern') IS NULL ALTER TABLE dbo.replay_item ADD error_pattern NVARCHAR(300) NULL;
 IF COL_LENGTH('dbo.replay_item', 'fix') IS NULL ALTER TABLE dbo.replay_item ADD fix VARCHAR(60) NULL;
+IF COL_LENGTH('dbo.replay_item', 'sent_phase') IS NULL ALTER TABLE dbo.replay_item ADD sent_phase VARCHAR(10) NULL;  -- CANARY | BULK
 
 IF OBJECT_ID('dbo.agent_audit_log') IS NULL
 CREATE TABLE dbo.agent_audit_log (

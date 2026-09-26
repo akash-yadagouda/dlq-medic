@@ -239,6 +239,8 @@ MODEL=openai/gpt-5-6-terra ./scripts/create-agent.sh   # registers the MCP serve
 
 **See the emails** the agent sends (after your approval) at http://localhost:8025 (Mailpit web inbox).
 
+**Check the outcome** from the systems themselves, not from the agent: `./scripts/verify.sh` (orders, charges, double charges, canary by fix, parked, emails, memory). Test cases and a demo script: [docs/DEMO_TEST_CASES.md](docs/DEMO_TEST_CASES.md).
+
 **Reset between runs:** stop `order-consumer`, run `./scripts/reset-demo.sh`, then start it again.
 
 ## Repository
@@ -250,7 +252,8 @@ MODEL=openai/gpt-5-6-terra ./scripts/create-agent.sh   # registers the MCP serve
 | `dlq-medic-mcp/` | The MCP server: 7 tools, vetted fixes, guardrails, audit log |
 | `agent/instructions.md` | The agent's role and six safety rules |
 | `skills/dlq-triage/` | The git-backed runbook skill: SKILL.md, the orders contract + vetted fixes, report templates |
-| `scripts/` | `init-env`, `seed`, `reset-demo` (`--forget` wipes memory), `create-agent`, `create-schedule`, `run-agent` |
+| `scripts/` | `init-env`, `seed`, `reset-demo` (`--forget` wipes memory), `create-agent`, `create-schedule`, `run-agent`, `verify` |
+| `docs/DEMO_TEST_CASES.md` | Test cases (TC-01…TC-08) and the demo recording script |
 
 ## Learning over time
 

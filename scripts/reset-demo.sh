@@ -35,6 +35,8 @@ if [[ "${1:-}" == "--forget" ]]; then
   echo "    incident memory wiped (--forget)"
 fi
 
+curl -s -X DELETE http://localhost:8025/api/v1/messages > /dev/null 2>&1 && echo "    Mailpit inbox emptied" || true
+
 echo "4/4 publishing the incident"
 ./scripts/seed.sh 2>&1 | grep -v "deprecated"
 echo "done: start order-consumer to process the backlog"

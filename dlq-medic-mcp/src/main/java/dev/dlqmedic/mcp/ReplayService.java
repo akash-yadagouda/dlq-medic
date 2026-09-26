@@ -270,7 +270,7 @@ public class ReplayService {
 			String messageId = (String) row.get("message_id");
 			String orderId = (String) row.get("order_id");
 			if (processedNow.contains(orderId)) {
-				markItem(batchId, messageId, "SKIPPED_ALREADY_PROCESSED");
+				markItem(batchId, messageId, "SKIPPED_ALREADY_PROCESSED", null);
 				skipped.add(orderId);
 				continue;
 			}
@@ -280,7 +280,7 @@ public class ReplayService {
 			out.headers().add("x-replay-batch", bytes(batchId));
 			out.headers().add("x-replayed-from", bytes(DltReader.DLT_TOPIC + "/" + messageId));
 			kafka.send(out).get(10, TimeUnit.SECONDS);
-			markItem(batchId, messageId, "SENT");
+			markItem(batchId, messageId, "SENT", phase);
 			sent.add(orderId);
 			String pattern = String.valueOf(row.get("error_pattern"));
 			canaryOrders.computeIfAbsent(pattern, k -> new ArrayList<>()).add(orderId);
@@ -330,6 +330,11 @@ public class ReplayService {
 				rejected.add(new Rejection(messageId, "Message is part of a replay batch; not parking it"));
 				continue;
 			}
+			if (!existingOrderIds(List.of(original.key())).isEmpty()) {
+				rejected.add(new Rejection(messageId, "Order " + original.key()
+						+ " is already processed; nothing for the owning team to fix. Include it in stage_replay, which records it as skipped."));
+				continue;
+			}
 			ProducerRecord<String, String> out = new ProducerRecord<>(PARK_TOPIC, original.key(), original.value());
 			out.headers().add("x-parked-reason", bytes(reason));
 			out.headers().add(DltReader.PARKED_FROM_HEADER, bytes(messageId));
@@ -355,12 +360,14 @@ public class ReplayService {
 		return dltReader.snapshot().stream().collect(Collectors.toMap(DltMessage::messageId, Function.identity()));
 	}
 
-	private void markItem(String batchId, String messageId, String status) {
+	private void markItem(String batchId, String messageId, String status, String phase) {
 		jdbc.sql("""
-				UPDATE dbo.replay_item SET status = :s, sent_at = CASE WHEN :s = 'SENT' THEN SYSUTCDATETIME() END
+				UPDATE dbo.replay_item
+				SET status = :s, sent_at = CASE WHEN :s = 'SENT' THEN SYSUTCDATETIME() END, sent_phase = :phase
 				WHERE batch_id = :b AND message_id = :m
 				""")
 			.param("s", status)
+			.param("phase", phase)
 			.param("b", batchId)
 			.param("m", messageId)
 			.update();
