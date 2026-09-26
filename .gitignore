@@ -1,0 +1,20 @@
+# secrets — never commit
+daytona.txt
+*.key
+.env
+.env.*
+!.env.example
+logs/
+
+# local tooling / build output
+.claude/
+.idea/
+target/
+*.iml
+.DS_Store
+
+# personal prep notes and throwaway spike (not part of the submission)
+spike/
+REHEARSAL_PLAN.md
+DAY_OF_PLAYBOOK.md
+GOTCHAS.md
