@@ -40,22 +40,107 @@ Result on the seeded incident: **186 replayed, 12 skipped as already processed, 
 | **Sandbox file downloads** | `incident-report.md` and `parked-messages.csv` handed to the human |
 | **Sessions API** | `scripts/run-agent.py` triggers the agent headlessly (as an alert would) and reports tokens and cost |
 
-## Architecture
+## Architecture: the harness we built on TrueForge
 
+TrueForge provides the harness: the agent loop, approval gate, sandbox bridge, skill loader, UI and sessions. We plugged the job into it: an MCP server with guardrails, a git-backed runbook skill, the agent definition, a schedule, and the real systems.
+
+```mermaid
+flowchart LR
+    subgraph TRIG["Triggers"]
+        H["On-call engineer<br/>TrueForge chat"]
+        S["TrueForge Schedule<br/>hourly dlt-watch"]
+        A["Alert or script<br/>Sessions API (run-agent.py)"]
+    end
+
+    subgraph TF["TrueForge harness · local :8790 · holds OpenAI + Daytona keys"]
+        DEF["Agent definition<br/>role + 6 safety rules<br/>(create-agent.sh)"]
+        LOOP["Agent loop<br/>sessions + event log"]
+        SKILL["Skill loader<br/>dlq-triage runbook"]
+        GATE{{"Approval gate<br/>@destructive tools"}}
+        BRIDGE["Code Mode bridge<br/>read-only tools only"]
+        UI["Generative UI cards<br/>+ file downloads"]
+    end
+
+    LLM["OpenAI gpt-5.6<br/>decides the next step"]
+    GH[("GitHub repo<br/>skills/dlq-triage")]
+
+    subgraph DAY["Daytona sandbox · cloud · no credentials"]
+        PY["Agent-written Python<br/>load · classify · rehearse fixes<br/>incident-report.md"]
+    end
+
+    subgraph MCP["dlq-medic MCP server · Java / Spring AI · :8081 · holds DB + Kafka credentials"]
+        TOOLS["9 annotated tools<br/>read-only · write · destructive"]
+        GUARD["Guardrails<br/>vetted fixes · canary gate<br/>duplicate checks · audit log"]
+        MEM["Incident memory<br/>recall + record"]
+    end
+
+    subgraph SYS["Real systems · docker-compose"]
+        K[("Kafka<br/>orders · orders.DLT · orders.parked")]
+        DB[("SQL Server<br/>orders · ledger · replay · memory<br/>least-privilege login")]
+        OC["order-consumer<br/>Spring Boot"]
+    end
+
+    H --> LOOP
+    S --> LOOP
+    A --> LOOP
+    DEF --> LOOP
+    GH -.->|"pulled on demand"| SKILL
+    SKILL --> LOOP
+    LOOP <-->|"Responses API"| LLM
+    LOOP -->|"exec"| PY
+    PY -->|"call_tool"| BRIDGE
+    BRIDGE -->|"read-only calls"| TOOLS
+    LOOP -->|"read + write tools"| TOOLS
+    LOOP -->|"execute_replay"| GATE
+    GATE -.->|"approval card"| H
+    GATE -->|"after approval"| TOOLS
+    LOOP --> UI
+    UI -.->|"plan + outcome cards, report files"| H
+    TOOLS --> GUARD
+    TOOLS --> MEM
+    GUARD --> K
+    GUARD --> DB
+    MEM --> DB
+    OC --> K
+    OC --> DB
 ```
-            ┌──────────────────────── TrueForge (local, :8790) ───────────────────────┐
-  you ────▶ │ agent loop · approval gates · sessions             ──▶ LLM provider API │
-            └───────┬──────────────────────────────────────────────┬─────────────────┘
-                    │ MCP (Streamable HTTP)                        │ sandbox tool
-                    ▼                                              ▼
-     dlq-medic-mcp  (Spring AI, :8081/mcp)           Daytona sandbox (cloud)
-     Kafka Admin/Consumer/Producer + JDBC            Python written by the agent;
-     vetted fixes · guardrails · audit log           read-only MCP calls bridged
-                    │                                back through the harness
-                    ▼
-     docker-compose: Kafka (KRaft) :9092 · SQL Server :1433
-                    ▲
-     order-consumer (Spring Boot) ── contract violations ──▶ orders.DLT (kafka_dlt-* headers)
+
+**One run through the harness** (the steps where TrueForge stops and waits are marked ⏸):
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Human as On-call human
+    participant TF as TrueForge
+    participant LLM as OpenAI
+    participant SB as Daytona sandbox
+    participant MCP as dlq-medic MCP
+    participant SYS as Kafka + SQL Server
+
+    Human->>TF: "orders.DLT is filling up" (or the hourly Schedule)
+    TF->>LLM: role + safety rules + tool list
+    LLM->>TF: get_pipeline_health, recall_similar_incidents
+    TF->>MCP: read-only tool calls
+    MCP->>SYS: lag, DLT depth, past incidents
+    LLM->>TF: load skill dlq-triage, then exec(Python)
+    TF->>SB: run the agent's own code
+    SB->>TF: call_tool peek_dlt / find_existing_orders (bridged, read-only)
+    TF->>MCP: read-only calls on behalf of the sandbox
+    SB-->>TF: summary only: 150 / 48 / 16, 12 already processed
+    LLM->>TF: stage_replay(fix names + message ids)
+    TF->>MCP: server applies vetted fixes and re-validates
+    TF-->>Human: plan card (Generative UI)
+    LLM->>TF: execute_replay(batch, 5)
+    TF-->>Human: ⏸ approval card: canary of 5
+    Human->>TF: Approve
+    TF->>MCP: send canary (server caps it at 5)
+    LLM->>TF: find_existing_orders(canary): 1 charge each
+    LLM->>TF: execute_replay(batch, rest)
+    TF-->>Human: ⏸ approval card: bulk replay
+    Human->>TF: Approve
+    TF->>MCP: bulk refused unless the canary landed
+    LLM->>TF: park_messages, record_incident
+    TF-->>Human: outcome card + incident-report.md + parked-messages.csv
 ```
 
 | Component | Role | Knows | Never sees |
