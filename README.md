@@ -2,7 +2,15 @@
 
 **An on-call agent for Kafka dead-letter topics.** When orders pile up in `orders.DLT`, DLQ Medic works out why, repairs what can be repaired safely, replays it without double-charging anyone, and hands off what it can't fix. It stops for a human before anything irreversible.
 
-Built on [TrueForge](https://github.com/truefoundry/trueforge) for the Polaris × TrueFoundry *Agents That Act* hackathon.
+Built on [TrueForge](https://github.com/truefoundry/trueforge) for the Polaris × TrueFoundry *Agents That Act* hackathon (Bangalore, 26 Sep 2026).
+
+**At a glance**
+- **Reaches real systems:** Kafka and SQL Server through a Java / Spring AI MCP server (10 annotated tools)
+- **Runs its own code:** Python it writes, in a Daytona sandbox, to classify every failed message and rehearse the fixes
+- **Stops before anything irreversible:** a canary (2 orders from every error type), the bulk replay and the email to the owning team each need human approval
+- **Result on the seeded incident:** 186 orders replayed, 12 already-processed orders skipped, 16 handed off, **0 double charges**, checked from the database by [`scripts/verify.sh`](scripts/verify.sh)
+
+Jump to: [Architecture](#architecture-the-harness-we-built-on-trueforge) · [Where it stops](#where-it-stops) · [Run it](#run-it) · [Demo & results](#demo--results) · [Learning over time](#learning-over-time)
 
 ## The job
 
@@ -254,6 +262,14 @@ MODEL=openai/gpt-5-6-terra ./scripts/create-agent.sh   # registers the MCP serve
 | `skills/dlq-triage/` | The git-backed runbook skill: SKILL.md, the orders contract + vetted fixes, report templates |
 | `scripts/` | `init-env`, `seed`, `reset-demo` (`--forget` wipes memory), `create-agent`, `create-schedule`, `run-agent`, `verify` |
 | `docs/DEMO_TEST_CASES.md` | Test cases (TC-01…TC-08) and the demo recording script |
+| `docs/sample-incident-report.md` | A real incident report written by the agent |
+
+## Demo & results
+
+- **Test cases and the demo script:** [docs/DEMO_TEST_CASES.md](docs/DEMO_TEST_CASES.md). There are 8 test cases (full run, memory recall, denied email, denied bulk replay, unattended schedule, all clear, least privilege, canary gate), each with expected results.
+- **Real agent output:** [docs/sample-incident-report.md](docs/sample-incident-report.md) is the incident report the agent wrote in its sandbox during a run, with a note on what we improved after reading it.
+- **Proof from the systems, not the agent:** `./scripts/verify.sh` prints orders, charges, **double charges**, the canary by fix, parked messages, emails sent and incident memory, straight from Kafka, SQL Server and Mailpit.
+- **Cost:** about **$0.01–0.03 per incident** on `gpt-5.6-luna`, measured from TrueForge session usage, with over 90% of input tokens served from cache. An hourly "All clear" check costs a fraction of a cent.
 
 ## Learning over time
 
