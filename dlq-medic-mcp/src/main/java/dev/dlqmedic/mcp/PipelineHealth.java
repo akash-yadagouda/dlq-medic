@@ -3,6 +3,7 @@ package dev.dlqmedic.mcp;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -22,11 +23,16 @@ public class PipelineHealth {
 	public record BatchSummary(String batchId, String status, int items, int sent, int staged, int skipped) {
 	}
 
+	/**
+	 * dltUnhandled counts DLT messages not yet staged, replayed, skipped or parked; the breakdowns cover only
+	 * those. openBatches counts replay batches still waiting for a canary or bulk approval.
+	 */
 	public record Snapshot(Map<String, Long> topicMessageCounts, String consumerGroup, long consumerLag,
-			Map<String, Long> dltByProducerVersion, Map<String, Long> dltByErrorClass, List<BatchSummary> replayBatches) {
+			long dltUnhandled, long dltParked, int openBatches, Map<String, Long> unhandledByProducerVersion,
+			Map<String, Long> unhandledByErrorClass, List<BatchSummary> replayBatches) {
 	}
 
-	private static final List<String> TOPICS = List.of("orders", DltReader.DLT_TOPIC, "orders.parked");
+	private static final List<String> TOPICS = List.of("orders", DltReader.DLT_TOPIC, DltReader.PARK_TOPIC);
 
 	private static final String CONSUMER_GROUP = "order-service";
 
@@ -34,11 +40,14 @@ public class PipelineHealth {
 
 	private final DltReader dltReader;
 
+	private final HandledMessages handled;
+
 	private final JdbcClient jdbc;
 
-	public PipelineHealth(KafkaAdmin kafkaAdmin, DltReader dltReader, JdbcClient jdbc) {
+	public PipelineHealth(KafkaAdmin kafkaAdmin, DltReader dltReader, HandledMessages handled, JdbcClient jdbc) {
 		this.kafkaAdmin = kafkaAdmin;
 		this.dltReader = dltReader;
+		this.handled = handled;
 		this.jdbc = jdbc;
 	}
 
@@ -77,9 +86,12 @@ public class PipelineHealth {
 				})
 				.sum();
 
-			List<DltMessage> dlt = dltReader.snapshot();
-			return new Snapshot(counts, CONSUMER_GROUP, lag, countBy(dlt, DltMessage::producerVersion),
-					countBy(dlt, DltMessage::errorClass), batches());
+			Set<String> parked = handled.parked();
+			Set<String> done = handled.inReplayBatches();
+			done.addAll(parked);
+			List<DltMessage> unhandled = dltReader.snapshot().stream().filter(m -> !done.contains(m.messageId())).toList();
+			return new Snapshot(counts, CONSUMER_GROUP, lag, unhandled.size(), parked.size(), handled.openBatches(),
+					countBy(unhandled, DltMessage::producerVersion), countBy(unhandled, DltMessage::errorClass), batches());
 		}
 	}
 

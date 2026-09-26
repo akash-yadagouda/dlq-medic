@@ -27,7 +27,7 @@ public class ReplayService {
 	/** The only topic a replay can ever write to. Not a parameter. */
 	static final String REPLAY_TARGET_TOPIC = "orders";
 
-	static final String PARK_TOPIC = "orders.parked";
+	static final String PARK_TOPIC = DltReader.PARK_TOPIC;
 
 	static final int CANARY_SIZE = 5;
 
@@ -96,6 +96,7 @@ public class ReplayService {
 				SELECT i.message_id FROM dbo.replay_item i JOIN dbo.replay_batch b ON b.batch_id = i.batch_id
 				WHERE i.status = 'SENT' OR b.status IN ('STAGED', 'CANARY_SENT')
 				""").query(String.class).list());
+		Set<String> parked = dltReader.parkedMessageIds();
 
 		Map<String, String> accepted = new LinkedHashMap<>(); // messageId -> fixed payload json
 		Set<String> seenOrderIds = new HashSet<>();
@@ -108,6 +109,9 @@ public class ReplayService {
 			}
 			else if (alreadyInBatches.contains(messageId)) {
 				problem = "Message is already staged or replayed";
+			}
+			else if (parked.contains(messageId)) {
+				problem = "Message was parked for the owning team; not replaying it";
 			}
 			else {
 				try {
@@ -255,9 +259,14 @@ public class ReplayService {
 		}
 		Map<String, DltMessage> dlt = dltById();
 		Set<String> inBatches = new HashSet<>(jdbc.sql("SELECT message_id FROM dbo.replay_item").query(String.class).list());
+		Set<String> alreadyParked = new HashSet<>(dltReader.parkedMessageIds());
 		List<Rejection> rejected = new ArrayList<>();
 		int parked = 0;
 		for (String messageId : messageIds) {
+			if (!alreadyParked.add(messageId)) {
+				rejected.add(new Rejection(messageId, "Already parked"));
+				continue;
+			}
 			DltMessage original = dlt.get(messageId);
 			if (original == null) {
 				rejected.add(new Rejection(messageId, "No such message in " + DltReader.DLT_TOPIC));
@@ -269,7 +278,7 @@ public class ReplayService {
 			}
 			ProducerRecord<String, String> out = new ProducerRecord<>(PARK_TOPIC, original.key(), original.value());
 			out.headers().add("x-parked-reason", bytes(reason));
-			out.headers().add("x-dlt-message-id", bytes(messageId));
+			out.headers().add(DltReader.PARKED_FROM_HEADER, bytes(messageId));
 			out.headers().add("x-dlt-error", bytes(String.valueOf(original.error())));
 			kafka.send(out).get(10, TimeUnit.SECONDS);
 			parked++;

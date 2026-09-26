@@ -2,6 +2,7 @@ package dev.dlqmedic.mcp;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Callable;
 
 import org.springframework.ai.mcp.annotation.McpTool;
@@ -32,16 +33,19 @@ public class DlqMedicTools {
 
 	private final DltReader dltReader;
 
+	private final HandledMessages handled;
+
 	private final ReplayService replay;
 
 	private final AuditLog audit;
 
 	private final JdbcClient jdbc;
 
-	public DlqMedicTools(PipelineHealth health, DltReader dltReader, ReplayService replay, AuditLog audit,
-			JdbcClient jdbc) {
+	public DlqMedicTools(PipelineHealth health, DltReader dltReader, HandledMessages handled, ReplayService replay,
+			AuditLog audit, JdbcClient jdbc) {
 		this.health = health;
 		this.dltReader = dltReader;
+		this.handled = handled;
 		this.replay = replay;
 		this.audit = audit;
 		this.jdbc = jdbc;
@@ -49,8 +53,9 @@ public class DlqMedicTools {
 
 	@McpTool(name = "get_pipeline_health", description = """
 			Snapshot of the order pipeline: message counts for orders / orders.DLT / orders.parked, \
-			consumer lag of the order-service group, DLT counts by producer-version and error class, \
-			and the status of any replay batches. Start every investigation here.""",
+			consumer lag of the order-service group, dltUnhandled (DLT messages not yet staged, replayed or \
+			parked; the DLT itself keeps everything forever), openBatches (replay batches waiting for approval), \
+			unhandled counts by producer-version and error class, and replay batch status. Start every investigation here.""",
 			annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false,
 					idempotentHint = true, openWorldHint = false))
 	public PipelineHealth.Snapshot getPipelineHealth() throws Exception {
@@ -60,17 +65,24 @@ public class DlqMedicTools {
 	@McpTool(name = "peek_dlt", description = """
 			Reads dead-lettered orders from orders.DLT, ordered by partition then offset. Each message has \
 			messageId ("partition:offset", used by all other tools), key (= orderId), the raw value, \
-			errorClass, the one-line error, and producerVersion. Stack traces are omitted. \
+			errorClass, the one-line error, and producerVersion. Stack traces are omitted. By default only \
+			unhandled messages are returned (not yet staged, replayed or parked). \
 			Page with fromIndex/nextIndex; at most 50 per call.""",
 			annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false,
 					idempotentHint = true, openWorldHint = false))
 	public DltPage peekDlt(
 			@McpToolParam(description = "0-based position to start from (use nextIndex from the previous page)", required = false) Integer fromIndex,
-			@McpToolParam(description = "Messages to return, 1-50 (default 50)", required = false) Integer limit) throws Exception {
+			@McpToolParam(description = "Messages to return, 1-50 (default 50)", required = false) Integer limit,
+			@McpToolParam(description = "Only messages not yet staged, replayed or parked (default true)", required = false) Boolean unhandledOnly) throws Exception {
 		int from = fromIndex == null ? 0 : Math.max(fromIndex, 0);
 		int size = limit == null ? MAX_PAGE : Math.min(Math.max(limit, 1), MAX_PAGE);
-		return audited("peek_dlt", Map.of("fromIndex", from, "limit", size), () -> {
+		boolean onlyUnhandled = unhandledOnly == null || unhandledOnly;
+		return audited("peek_dlt", Map.of("fromIndex", from, "limit", size, "unhandledOnly", onlyUnhandled), () -> {
 			List<DltMessage> all = dltReader.snapshot();
+			if (onlyUnhandled) {
+				Set<String> done = handled.all();
+				all = all.stream().filter(m -> !done.contains(m.messageId())).toList();
+			}
 			List<DltMessage> page = all.subList(Math.min(from, all.size()), Math.min(from + size, all.size()));
 			Integer next = from + page.size() < all.size() ? from + page.size() : null;
 			return new DltPage(all.size(), from, page.size(), next, page);
