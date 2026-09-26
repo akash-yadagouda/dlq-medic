@@ -8,6 +8,12 @@ MODEL=${MODEL:-openai/gpt-5-6-terra}
 SKILL_REPO=${SKILL_REPO:-https://github.com/akash-yadagouda/dlq-medic}
 SKILL_REF=${SKILL_REF:-main}   # pin a tag or commit SHA for production
 
+if ! curl -sf "$TF/api/v1/capabilities" > /dev/null; then
+  echo "TrueForge is not reachable at $TF. Start it first:" >&2
+  echo "  OUTBOUND_URL_ALLOWED_HOSTS='[\"localhost\"]' npx --yes @truefoundry/trueforge@latest" >&2
+  exit 1
+fi
+
 # 1. Register the MCP server (idempotent PUT)
 curl -sf -X PUT "$TF/api/v1/settings/mcp-servers" -H 'Content-Type: application/json' -d '{"manifest":{"type":"remote","name":"dlq-medic","url":"http://localhost:8081/mcp","description":"Kafka orders pipeline operations: pipeline health, dead-letter (orders.DLT) inspection, idempotency checks against the orders DB, staged replays with server-enforced canary, parking, audit log."}}' > /dev/null
 

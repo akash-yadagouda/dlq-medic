@@ -7,6 +7,12 @@ cd "$(dirname "$0")/.."
 TF=${TRUEFORGE_URL:-http://localhost:8790}
 NAME=dlt-watch
 
+if ! curl -sf "$TF/api/v1/capabilities" > /dev/null; then
+  echo "TrueForge is not reachable at $TF. Start it first:" >&2
+  echo "  OUTBOUND_URL_ALLOWED_HOSTS='[\"localhost\"]' npx --yes @truefoundry/trueforge@latest" >&2
+  exit 1
+fi
+
 MANIFEST=$(python3 <<'PY'
 import json
 task = """Scheduled DLT watch (unattended run; a human reviews this session later).
