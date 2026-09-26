@@ -45,57 +45,60 @@ Result on the seeded incident: **186 replayed, 12 skipped as already processed, 
 TrueForge provides the harness: the agent loop, approval gate, sandbox bridge, skill loader, UI and sessions. We plugged the job into it: an MCP server with guardrails, a git-backed runbook skill, the agent definition, a schedule, and the real systems.
 
 ```mermaid
-flowchart LR
-    subgraph TRIG["Triggers"]
+flowchart TB
+    subgraph TRIG["① Triggers"]
+        direction LR
         H["On-call engineer<br/>TrueForge chat"]
         S["TrueForge Schedule<br/>hourly dlt-watch"]
-        A["Alert or script<br/>Sessions API (run-agent.py)"]
+        A["Alert or script<br/>Sessions API"]
     end
 
-    subgraph TF["TrueForge harness · local :8790 · holds OpenAI + Daytona keys"]
-        DEF["Agent definition<br/>role + 6 safety rules<br/>(create-agent.sh)"]
-        LOOP["Agent loop<br/>sessions + event log"]
+    subgraph TF["② TrueForge harness · holds the OpenAI + Daytona keys"]
+        direction LR
+        DEF["Agent definition<br/>role + 6 safety rules"]
         SKILL["Skill loader<br/>dlq-triage runbook"]
+        LOOP(["Agent loop<br/>sessions + event log"])
         GATE{{"Approval gate<br/>@destructive tools"}}
-        BRIDGE["Code Mode bridge<br/>read-only tools only"]
         UI["Generative UI cards<br/>+ file downloads"]
+        BRIDGE["Code Mode bridge<br/>read-only tools only"]
     end
 
+    GH[("GitHub<br/>skills/dlq-triage")]
     LLM["OpenAI gpt-5.6<br/>decides the next step"]
-    GH[("GitHub repo<br/>skills/dlq-triage")]
+    HA(["On-call human<br/>approves or denies"])
 
-    subgraph DAY["Daytona sandbox · cloud · no credentials"]
+    subgraph DAY["③ Daytona sandbox · no credentials"]
         PY["Agent-written Python<br/>load · classify · rehearse fixes<br/>incident-report.md"]
     end
 
-    subgraph MCP["dlq-medic MCP server · Java / Spring AI · :8081 · holds DB + Kafka credentials"]
+    subgraph MCP["④ dlq-medic MCP server · Java / Spring AI · holds the DB + Kafka credentials"]
+        direction LR
         TOOLS["9 annotated tools<br/>read-only · write · destructive"]
         GUARD["Guardrails<br/>vetted fixes · canary gate<br/>duplicate checks · audit log"]
         MEM["Incident memory<br/>recall + record"]
     end
 
-    subgraph SYS["Real systems · docker-compose"]
-        K[("Kafka<br/>orders · orders.DLT · orders.parked")]
-        DB[("SQL Server<br/>orders · ledger · replay · memory<br/>least-privilege login")]
+    subgraph SYS["⑤ Real systems · docker-compose"]
+        direction LR
         OC["order-consumer<br/>Spring Boot"]
+        K[("Kafka<br/>orders · orders.DLT · orders.parked")]
+        DB[("SQL Server<br/>least-privilege login")]
     end
 
-    H --> LOOP
-    S --> LOOP
-    A --> LOOP
-    DEF --> LOOP
+    TRIG --> LOOP
     GH -.->|"pulled on demand"| SKILL
+    DEF --> LOOP
     SKILL --> LOOP
     LOOP <-->|"Responses API"| LLM
+    LOOP -->|"execute_replay"| GATE
+    GATE <-.->|"approval card"| HA
+    UI -.->|"plan + outcome, report files"| HA
+    LOOP --> UI
     LOOP -->|"exec"| PY
     PY -->|"call_tool"| BRIDGE
-    BRIDGE -->|"read-only calls"| TOOLS
+    BRIDGE -->|"read-only"| TOOLS
     LOOP -->|"read + write tools"| TOOLS
-    LOOP -->|"execute_replay"| GATE
-    GATE -.->|"approval card"| H
     GATE -->|"after approval"| TOOLS
-    LOOP --> UI
-    UI -.->|"plan + outcome cards, report files"| H
     TOOLS --> GUARD
     TOOLS --> MEM
     GUARD --> K
@@ -105,7 +108,7 @@ flowchart LR
     OC --> DB
 ```
 
-**One run through the harness** (the steps where TrueForge stops and waits are marked ⏸):
+**One run through the harness** (the steps where TrueForge stops and waits are marked PAUSE):
 
 ```mermaid
 sequenceDiagram
@@ -131,12 +134,12 @@ sequenceDiagram
     TF->>MCP: server applies vetted fixes and re-validates
     TF-->>Human: plan card (Generative UI)
     LLM->>TF: execute_replay(batch, 5)
-    TF-->>Human: ⏸ approval card: canary of 5
+    TF-->>Human: PAUSE approval card: canary of 5
     Human->>TF: Approve
     TF->>MCP: send canary (server caps it at 5)
     LLM->>TF: find_existing_orders(canary): 1 charge each
     LLM->>TF: execute_replay(batch, rest)
-    TF-->>Human: ⏸ approval card: bulk replay
+    TF-->>Human: PAUSE approval card: bulk replay
     Human->>TF: Approve
     TF->>MCP: bulk refused unless the canary landed
     LLM->>TF: park_messages, record_incident
