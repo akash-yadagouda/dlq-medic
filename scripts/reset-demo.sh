@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Wipes Kafka topics, the consumer group and all tables, then re-publishes the incident.
+# Long-term incident memory survives the reset; pass --forget to wipe it too.
 # Stop order-consumer first (the consumer group must be empty to reset it).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -28,6 +29,10 @@ docker exec -e P="$MSSQL_SA_PASSWORD" sqlserver bash -c '/opt/mssql-tools18/bin/
   SET NOCOUNT ON;
   DELETE dbo.replay_item; DELETE dbo.replay_batch;
   TRUNCATE TABLE dbo.orders; TRUNCATE TABLE dbo.payment_ledger; TRUNCATE TABLE dbo.agent_audit_log;"'
+if [[ "${1:-}" == "--forget" ]]; then
+  docker exec -e P="$MSSQL_SA_PASSWORD" sqlserver bash -c '/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$P" -C -b -d orders_db -Q "SET NOCOUNT ON; TRUNCATE TABLE dbo.incident_memory;"'
+  echo "    incident memory wiped (--forget)"
+fi
 
 echo "4/4 publishing the incident"
 ./scripts/seed.sh 2>&1 | grep -v "deprecated"

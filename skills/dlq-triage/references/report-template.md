@@ -8,6 +8,7 @@ One Card titled "Replay plan: <batchId>" containing, side by side:
 - a **Table** with columns: Error pattern · Messages · Producer version · Action
 
 Action is one of: `replay via <fix name>`, `skip: already processed (<n>)`, `park: <reason>`.
+If recall_similar_incidents found a match, add a "Seen before" line: incident id, date, similarity and what happened.
 Below it, one line of text: "Next: a 5-message canary needs your approval; the rest waits until the canary is verified."
 
 ## 2. Outcome card (step 11)

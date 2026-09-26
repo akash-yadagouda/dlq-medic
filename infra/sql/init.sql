@@ -64,6 +64,20 @@ CREATE TABLE dbo.agent_audit_log (
     outcome  VARCHAR(20)   NOT NULL,  -- OK | REJECTED | ERROR
     detail   NVARCHAR(MAX) NULL
 );
+
+-- Long-term incident memory. Survives demo resets; append-only for the agent.
+IF OBJECT_ID('dbo.incident_memory') IS NULL
+CREATE TABLE dbo.incident_memory (
+    incident_id       BIGINT IDENTITY PRIMARY KEY,
+    recorded_at       DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME(),
+    batch_id          VARCHAR(40)    NULL,
+    producer_versions NVARCHAR(200)  NOT NULL,
+    patterns          NVARCHAR(MAX)  NOT NULL,  -- JSON [{errorPattern, count, action}], validated against the DLT
+    root_cause        NVARCHAR(1000) NOT NULL,
+    outcome           NVARCHAR(400)  NOT NULL,  -- JSON computed by the server from the batch, not by the model
+    human_decisions   NVARCHAR(2000) NULL,
+    lessons           NVARCHAR(2000) NULL
+);
 GO
 
 -- ── Least-privilege identities ────────────────────────────────────────────
@@ -94,6 +108,8 @@ GRANT SELECT, INSERT, UPDATE ON dbo.replay_batch    TO dlq_medic;
 GRANT SELECT, INSERT, UPDATE ON dbo.replay_item     TO dlq_medic;
 GRANT SELECT, INSERT         ON dbo.agent_audit_log TO dlq_medic;
 DENY  UPDATE, DELETE         ON dbo.agent_audit_log TO dlq_medic;
+GRANT SELECT, INSERT         ON dbo.incident_memory TO dlq_medic;
+DENY  UPDATE, DELETE         ON dbo.incident_memory TO dlq_medic;
 DENY  INSERT, UPDATE, DELETE ON dbo.orders          TO dlq_medic;
 DENY  INSERT, UPDATE, DELETE ON dbo.payment_ledger  TO dlq_medic;
 GO

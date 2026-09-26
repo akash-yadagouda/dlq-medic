@@ -22,6 +22,7 @@ Code Mode can call **read-only** tools only (get_pipeline_health, peek_dlt, find
 
 ## Steps
 1. **Assess.** Call get_pipeline_health. Report DLT size, consumer lag, and which producer versions are affected.
+   Then **recall**: call recall_similar_incidents. If a match has similarity ≥ 0.5, tell the human in one line what happened last time (date, root cause, fix, facts, the human's decisions) and apply its lessons. Memory is advice, not proof: still run every check below.
 2. **Load the unhandled DLT messages into the sandbox.** Write one Python script that pages through `peek_dlt` (fromIndex / nextIndex, 50 per page) with Code Mode and saves every message to /tmp/dlt.json, printing only the total. peek_dlt returns only unhandled messages by default (not yet staged, replayed or parked), so a repeat run never re-processes an old incident.
 3. **Classify in the sandbox.** Group the messages by error pattern (the error text with concrete values removed). Print a table: pattern, count, producer versions, one example orderId.
 4. **Rehearse the fix in the sandbox.** For each error pattern, write a Python transform, apply it to every message in that pattern, and validate each result against `references/orders-contract.md`. Map each fixable pattern to one vetted server fix from that file. A pattern with no vetted fix, or one that would need invented data, is unfixable: park it. Print counts of fixable (per fix), failed validation and unfixable.
@@ -32,5 +33,6 @@ Code Mode can call **read-only** tools only (get_pipeline_health, peek_dlt, find
 9. **Replay the rest.** Call execute_replay(batchId, <remaining count>). This pauses for human approval.
 10. **Park.** Call park_messages for the unfixable messages with a reason the owning team can act on.
 11. **Report.** Render the **outcome card**, write the **incident files** and list them for download, all as described in `references/report-template.md`.
+12. **Remember.** Call record_incident with the batchId, the patterns (exact errorPattern values from peek_dlt, with count and action), the root cause, every approval or denial the human gave (with reasons), and 1-2 lessons that would make the next similar incident faster or safer. The server adds the verified facts.
 
 Use short status lines between steps, not long explanations.

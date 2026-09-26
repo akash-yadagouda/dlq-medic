@@ -27,6 +27,19 @@ DLQ Medic does the careful version of this job:
 
 Result on the seeded incident: **186 replayed, 12 skipped as already processed, 16 parked, 0 double charges.**
 
+## How it uses TrueForge
+
+| TrueForge feature | How DLQ Medic uses it |
+|---|---|
+| **MCP connector** | `dlq-medic-mcp` (Java / Spring AI) is the agent's only way into Kafka and SQL Server |
+| **Tool approval** | Tools are annotated read-only / write / destructive; only `execute_replay` pauses for a human |
+| **Sandbox + Code Mode** | The agent's own Python loads, classifies and rehearses fixes on every DLT message; read-only MCP calls are bridged from the sandbox |
+| **Git-backed Skill** | The runbook lives in [`skills/dlq-triage`](skills/dlq-triage) (SKILL.md + references), loaded on demand; the agent prompt keeps only the role and safety rules |
+| **Schedules** | An hourly `dlt-watch` runs unattended: "All clear" when nothing is new, a full triage waiting at the approval card when something is |
+| **Generative UI** | A plan card (donut + action table) before the first approval, and an outcome card with KPI tiles at the end |
+| **Sandbox file downloads** | `incident-report.md` and `parked-messages.csv` handed to the human |
+| **Sessions API** | `scripts/run-agent.py` triggers the agent headlessly (as an alert would) and reports tokens and cost |
+
 ## Architecture
 
 ```
@@ -59,7 +72,8 @@ Safety is enforced **in the MCP server and the database**, not in the prompt.
 
 | Tool | MCP annotation | Gate |
 |---|---|---|
-| `get_pipeline_health`, `peek_dlt`, `find_existing_orders`, `get_audit_log` | read-only | none (also callable from sandbox Code Mode) |
+| `get_pipeline_health`, `peek_dlt`, `find_existing_orders`, `recall_similar_incidents`, `get_audit_log` | read-only | none (also callable from sandbox Code Mode) |
+| `record_incident` | write, append-only | none: it only adds to the agent's memory, and the server computes the facts |
 | `stage_replay` | write, non-destructive | none: it only writes our own staging tables |
 | `park_messages` | write, non-destructive | none: it only adds data, and the DLT keeps its copy |
 | **`execute_replay`** | **destructive** | **human approval, every call** |
@@ -114,7 +128,8 @@ Then open http://localhost:8790:
 
 **4. Create the agent**
 ```bash
-MODEL=openai/gpt-5-6-terra ./scripts/create-agent.sh   # registers the MCP server + creates the dlq-medic agent
+MODEL=openai/gpt-5-6-terra ./scripts/create-agent.sh   # registers the MCP server + skill, creates the dlq-medic agent
+./scripts/create-schedule.sh --run-now                  # optional: hourly unattended watch, plus one run now
 ```
 
 **5. Run it**
@@ -133,8 +148,38 @@ MODEL=openai/gpt-5-6-terra ./scripts/create-agent.sh   # registers the MCP serve
 | `docker-compose.yml`, `infra/sql/init.sql` | Kafka KRaft, SQL Server, topics, schema, least-privilege logins |
 | `order-consumer/` | The service being protected: strict contract → DLT; non-idempotent upsert + charge |
 | `dlq-medic-mcp/` | The MCP server: 7 tools, vetted fixes, guardrails, audit log |
-| `agent/instructions.md` | The runbook the agent follows |
-| `scripts/` | `init-env`, `seed`, `reset-demo`, `create-agent`, `run-agent` |
+| `agent/instructions.md` | The agent's role and six safety rules |
+| `skills/dlq-triage/` | The git-backed runbook skill: SKILL.md, the orders contract + vetted fixes, report templates |
+| `scripts/` | `init-env`, `seed`, `reset-demo` (`--forget` wipes memory), `create-agent`, `create-schedule`, `run-agent` |
+
+## Learning over time
+
+**The agent may learn *how* to do the job, but never changes *what it's allowed* to do.** Every lesson follows the same path as code: proposal → evidence → human approval → versioned → pinned.
+
+**Built today: incident memory.** At the end of each run the agent calls `record_incident`. The server stores the error patterns (computed by the server, not phrased by the model), the verified facts from the batch (replayed, skipped, double charges), the human's approve/deny decisions and the agent's lessons. On the next incident, `recall_similar_incidents` scores past incidents by pattern similarity, and the agent starts with *"seen before: same producer bug, this fix worked, 0 double charges"*. The table is append-only for the agent, and memory survives demo resets (`reset-demo.sh --forget` wipes it).
+
+**Roadmap**
+
+```
+ incident ─▶ agent run ─▶ ① record_incident ─▶ incident_memory ─▶ recalled next time
+                                  │
+                                  ▼ nightly TrueForge Schedule
+                       ② retrospective agent reads sessions, audit log, deny reasons
+                          proposes runbook edits · new vetted fixes · policy changes
+                                  ▼
+                       ③ evidence: new fix proven in the sandbox on real failed messages
+                          + eval suite of seeded incidents (must keep 0 double charges)
+                                  ▼
+                       ④ human review: PR to skills/ or the fix catalogue ─▶ merge ─▶ pin the skill commit
+```
+
+| What learns | Mechanism | Who approves |
+|---|---|---|
+| Incident memory ✅ | `record_incident` / `recall_similar_incidents` | nobody needed: it's a record |
+| The runbook | Retrospective agent opens a PR to `skills/dlq-triage` | an engineer |
+| New vetted fixes | Agent proves a transform in the sandbox on the real messages, then proposes it with test cases | an engineer, and the evals must pass |
+| Human preferences | Deny reasons from session events become proposed runbook rules | an engineer |
+| Earned autonomy | A fix with a long clean record may skip the canary click; **bulk replay always needs a human** | engineers change the policy; the agent never grants itself autonomy |
 
 ## AI assistance disclosure
 

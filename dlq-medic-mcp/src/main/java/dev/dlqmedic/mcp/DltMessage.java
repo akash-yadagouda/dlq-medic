@@ -2,6 +2,7 @@ package dev.dlqmedic.mcp;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.regex.Pattern;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.header.Header;
@@ -11,10 +12,13 @@ import org.apache.kafka.common.header.Header;
  * is deliberately dropped: it is ~1,200 tokens per message and adds nothing the cause message lacks.
  */
 public record DltMessage(String messageId, String key, String value, String errorClass, String error,
-		String producerVersion, String originalTopic, Integer originalPartition, Long originalOffset,
-		Long originalTimestamp) {
+		String errorPattern, String producerVersion, String originalTopic, Integer originalPartition,
+		Long originalOffset, Long originalTimestamp) {
 
 	private static final String WRAPPER_MARKER = "threw exception; ";
+
+	/** A trailing "(<offending value>)" in the error message; dropped to get a stable pattern key. */
+	private static final Pattern OFFENDING_VALUE = Pattern.compile("\\s*\\(.*\\)\\s*$");
 
 	/** Stable id used by every tool: "<DLT partition>:<DLT offset>". */
 	static String idOf(int partition, long offset) {
@@ -32,9 +36,17 @@ public record DltMessage(String messageId, String key, String value, String erro
 		}
 		return new DltMessage(idOf(record.partition(), record.offset()), record.key(), record.value(),
 				causeClass == null ? null : causeClass.substring(causeClass.lastIndexOf('.') + 1), message,
-				text(record, "producer-version"), text(record, "kafka_dlt-original-topic"),
+				patternOf(message), text(record, "producer-version"), text(record, "kafka_dlt-original-topic"),
 				intHeader(record, "kafka_dlt-original-partition"), longHeader(record, "kafka_dlt-original-offset"),
 				longHeader(record, "kafka_dlt-original-timestamp"));
+	}
+
+	/**
+	 * Canonical error pattern, e.g. "Field 'amount' must be a JSON number but was STRING". Computed by the
+	 * server so the same failure always gets the same key, however the model would phrase it.
+	 */
+	static String patternOf(String error) {
+		return error == null ? "unknown" : OFFENDING_VALUE.matcher(error).replaceFirst("");
 	}
 
 	private static byte[] raw(ConsumerRecord<?, ?> record, String name) {

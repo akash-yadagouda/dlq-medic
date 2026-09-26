@@ -37,16 +37,19 @@ public class DlqMedicTools {
 
 	private final ReplayService replay;
 
+	private final IncidentMemory memory;
+
 	private final AuditLog audit;
 
 	private final JdbcClient jdbc;
 
 	public DlqMedicTools(PipelineHealth health, DltReader dltReader, HandledMessages handled, ReplayService replay,
-			AuditLog audit, JdbcClient jdbc) {
+			IncidentMemory memory, AuditLog audit, JdbcClient jdbc) {
 		this.health = health;
 		this.dltReader = dltReader;
 		this.handled = handled;
 		this.replay = replay;
+		this.memory = memory;
 		this.audit = audit;
 		this.jdbc = jdbc;
 	}
@@ -155,6 +158,35 @@ public class DlqMedicTools {
 			@McpToolParam(description = "Why they cannot be replayed, for the owning team") String reason) throws Exception {
 		return audited("park_messages", Map.of("count", messageIds.size(), "reason", String.valueOf(reason)),
 				() -> replay.park(messageIds, reason));
+	}
+
+	@McpTool(name = "recall_similar_incidents", description = """
+			Long-term memory. Compares the error patterns of the current unhandled DLT messages (computed by the \
+			server) with past incidents, and returns the most similar ones: similarity (0-1), shared patterns, \
+			producer versions, root cause, server-verified facts (replayed, skipped, double charges), the human's \
+			approve/deny decisions and lessons. Call it right after assessing. Memory is advice, not proof.""",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false,
+					idempotentHint = true, openWorldHint = false))
+	public IncidentMemory.Recall recallSimilarIncidents(
+			@McpToolParam(description = "How many past incidents to return (default 3)", required = false) Integer limit) throws Exception {
+		return audited("recall_similar_incidents", null, () -> memory.recall(limit == null ? 3 : limit));
+	}
+
+	@McpTool(name = "record_incident", description = """
+			Saves this incident to long-term memory at the end of a run (append-only). Give the batchId, the \
+			patterns (use the exact errorPattern values from peek_dlt, with count and the action taken), the root \
+			cause, the human's approval/deny decisions with any reasons, and 1-2 lessons for next time. The server \
+			computes the facts itself (replayed, skipped, double charges) from the batch and rejects unknown patterns.""",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = false, destructiveHint = false,
+					idempotentHint = false, openWorldHint = false))
+	public IncidentMemory.RecordResult recordIncident(
+			@McpToolParam(description = "Replay batch id of this incident (omit if nothing was staged)", required = false) String batchId,
+			@McpToolParam(description = "[{errorPattern, count, action}] with errorPattern exactly as returned by peek_dlt") List<IncidentMemory.PatternCount> patterns,
+			@McpToolParam(description = "Root cause: producer version and what changed") String rootCause,
+			@McpToolParam(description = "Each approval or denial by the human, with its reason", required = false) String humanDecisions,
+			@McpToolParam(description = "1-2 lessons that would make the next similar incident faster or safer", required = false) String lessons) throws Exception {
+		return audited("record_incident", Map.of("batchId", String.valueOf(batchId), "patterns", patterns == null ? 0 : patterns.size()),
+				() -> memory.record(batchId, patterns, rootCause, humanDecisions, lessons));
 	}
 
 	@McpTool(name = "get_audit_log", description = "Most recent agent actions recorded by this server (newest first).",
