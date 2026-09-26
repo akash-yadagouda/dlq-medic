@@ -32,11 +32,13 @@ public class IncidentMemory {
 			List<PatternCount> patterns, String rootCause, Facts facts, String humanDecisions, String lessons) {
 	}
 
-	public record Match(double similarity, List<String> sharedPatterns, boolean sameProducerVersion, Incident incident) {
+	public record Match(double similarity, List<String> sharedPatterns, boolean sameProducerVersion, String headline,
+			Incident incident) {
 	}
 
-	public record Recall(List<String> currentPatterns, List<String> currentProducerVersions, List<Match> matches,
-			String note) {
+	/** headline: one sentence for the human, written by the server from stored facts. Show it verbatim. */
+	public record Recall(String headline, List<String> currentPatterns, List<String> currentProducerVersions,
+			List<Match> matches, String note) {
 	}
 
 	public record RecordResult(String status, Long incidentId, Facts facts, List<String> rejectedPatterns,
@@ -67,7 +69,8 @@ public class IncidentMemory {
 		Set<String> patterns = unhandled.stream().map(DltMessage::errorPattern).collect(Collectors.toCollection(TreeSet::new));
 		Set<String> versions = unhandled.stream().map(DltMessage::producerVersion).collect(Collectors.toCollection(TreeSet::new));
 		if (patterns.isEmpty()) {
-			return new Recall(List.of(), List.of(), List.of(), "No unhandled DLT messages, so there is nothing to match.");
+			return new Recall("Nothing to recall: there are no unhandled DLT messages.", List.of(), List.of(), List.of(),
+					"No unhandled DLT messages, so there is nothing to match.");
 		}
 		List<Match> matches = new ArrayList<>();
 		for (Incident past : history()) {
@@ -81,12 +84,17 @@ public class IncidentMemory {
 			union.addAll(pastPatterns);
 			double similarity = Math.round(100.0 * shared.size() / union.size()) / 100.0;
 			boolean sameVersion = past.producerVersions().stream().anyMatch(versions::contains);
-			matches.add(new Match(similarity, List.copyOf(shared), sameVersion, past));
+			matches.add(new Match(similarity, List.copyOf(shared), sameVersion,
+					headline(past, similarity, shared.size(), patterns.size(), sameVersion), past));
 		}
 		matches.sort(Comparator.comparingDouble(Match::similarity).reversed()
 			.thenComparing(m -> m.incident().incidentId(), Comparator.reverseOrder()));
 		List<Match> top = matches.stream().limit(Math.max(limit, 1)).toList();
-		return new Recall(List.copyOf(patterns), List.copyOf(versions), top,
+		String headline = top.isEmpty()
+				? "New incident: no similar past incident in memory (" + patterns.size() + " error types, producer "
+						+ String.join(", ", versions) + ")."
+				: top.get(0).headline();
+		return new Recall(headline, List.copyOf(patterns), List.copyOf(versions), top,
 				top.isEmpty() ? "No similar past incident: this failure is new." : "Memory is advice, not proof: validate as usual.");
 	}
 
@@ -134,6 +142,27 @@ public class IncidentMemory {
 			.single();
 		return new RecordResult("RECORDED", id, facts, rejected,
 				"Remembered. Future incidents with these patterns will recall it.");
+	}
+
+	private static String headline(Incident past, double similarity, int shared, int current, boolean sameVersion) {
+		StringBuilder h = new StringBuilder("Seen before: incident #").append(past.incidentId())
+			.append(" on ").append(past.recordedAt().replace('T', ' '), 0, Math.min(16, past.recordedAt().length()))
+			.append(" UTC, similarity ").append(String.format("%.2f", similarity))
+			.append(" (").append(shared).append(" of ").append(current).append(" error types")
+			.append(sameVersion ? ", same producer " + String.join(", ", past.producerVersions()) : "").append("). ")
+			.append("Last time: ").append(past.facts().replayed()).append(" replayed, ")
+			.append(past.facts().skippedAlreadyProcessed()).append(" skipped as already processed, ")
+			.append(past.facts().doubleCharges()).append(" double charges.");
+		if (past.humanDecisions() != null && !past.humanDecisions().isBlank()) {
+			h.append(" Human decisions: ").append(past.humanDecisions().strip());
+			if (h.charAt(h.length() - 1) != '.') {
+				h.append('.');
+			}
+		}
+		if (past.lessons() != null && !past.lessons().isBlank()) {
+			h.append(" Lesson: ").append(past.lessons().strip());
+		}
+		return h.toString();
 	}
 
 	private Facts factsOf(String batchId) {

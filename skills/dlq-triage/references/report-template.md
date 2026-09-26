@@ -10,7 +10,7 @@ One Card titled "Error types found: <batchId>", so the developer sees every kind
 
 Action is one of: `replay via <fix name>`, `park: <reason>`. Add one more row "Already processed" with its count and action `skip (would double-charge)`.
 Take the fixable rows, their examples and canary counts from stage_replay `errorTypes`; take the unfixable rows from your sandbox classification (canary 0).
-If recall_similar_incidents found a match, add a "Seen before" line: incident id, date, similarity and what happened.
+Always add a "Memory" line with the recall `headline` verbatim ("Seen before: incident #…" or "New incident: …").
 Below it, one line: "Next: a canary of <canarySize> orders (2 from each fixable error type) needs your approval; the rest waits until every error type's canary is verified."
 
 ## 2. Outcome card (step 11)
