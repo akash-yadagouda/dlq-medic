@@ -125,7 +125,8 @@ public class DlqMedicTools {
 			amount_string_to_number (amount sent as a JSON string -> number), \
 			epoch_millis_to_iso8601 (createdAt sent as epoch millis -> ISO-8601; needs utcOffset such as "+05:30"). \
 			Messages no vetted fix can repair must be parked, not staged. \
-			Returns batchId, staged count, skipped orderIds, per-message rejections and two sample payloads.""",
+			Returns batchId, staged count, skipped orderIds, per-message rejections, canarySize, and errorTypes: \
+			for every error type its count, fix, how many go in the canary, and a real before/after example.""",
 			annotations = @McpTool.McpAnnotations(readOnlyHint = false, destructiveHint = false,
 					idempotentHint = false, openWorldHint = false))
 	public ReplayService.StageResult stageReplay(
@@ -139,9 +140,11 @@ public class DlqMedicTools {
 
 	@McpTool(name = "execute_replay", description = """
 			Replays a staged batch to the live `orders` topic (apply step). IRREVERSIBLE: the order consumer \
-			will charge customers. Server-enforced rules: the first call on a batch sends at most 5 (canary); \
-			further calls are refused until every canary order is visible in the orders table; already-processed \
-			orders are skipped again at send time; the target topic is fixed. Requires human approval.""",
+			will charge customers. Server-enforced rules: the first call on a batch is the canary, and the SERVER \
+			picks it: 2 messages from EVERY error type in the batch (whatever maxCount says), so each fix is proven; \
+			the result lists the canary orders per error type. Further calls are refused until every canary order is \
+			visible in the orders table. Already-processed orders are skipped again at send time; the target topic \
+			is fixed. Requires human approval.""",
 			annotations = @McpTool.McpAnnotations(readOnlyHint = false, destructiveHint = true,
 					idempotentHint = false, openWorldHint = false))
 	public ReplayService.ExecuteResult executeReplay(

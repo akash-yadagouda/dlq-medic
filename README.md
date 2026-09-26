@@ -36,7 +36,7 @@ Result on the seeded incident: **186 replayed, 12 skipped as already processed, 
 | **Sandbox + Code Mode** | The agent's own Python loads, classifies and rehearses fixes on every DLT message; read-only MCP calls are bridged from the sandbox |
 | **Git-backed Skill** | The runbook lives in [`skills/dlq-triage`](skills/dlq-triage) (SKILL.md + references), loaded on demand; the agent prompt keeps only the role and safety rules |
 | **Schedules** | An hourly `dlt-watch` runs unattended: "All clear" when nothing is new, a full triage waiting at the approval card when something is |
-| **Generative UI** | A plan card (donut + action table) before the first approval, and an outcome card with KPI tiles at the end |
+| **Generative UI** | An error-type briefing card (donut + one row per error type with a real example, fix and canary count) before the first approval, and an outcome card with KPI tiles at the end |
 | **Sandbox file downloads** | `incident-report.md` and `parked-messages.csv` handed to the human |
 | **Approval on a real side effect** | `notify_owning_team` emails the owning team only after the human reads and approves the draft (Mailpit catches it locally) |
 | **Sessions API** | `scripts/run-agent.py` triggers the agent headlessly (as an alert would) and reports tokens and cost |
@@ -135,12 +135,12 @@ sequenceDiagram
     SB-->>TF: summary only: 150 / 48 / 16, 12 already processed
     LLM->>TF: stage_replay(fix names + message ids)
     TF->>MCP: server applies vetted fixes and re-validates
-    TF-->>Human: plan card (Generative UI)
-    LLM->>TF: execute_replay(batch, 5)
-    TF-->>Human: PAUSE approval card: canary of 5
+    TF-->>Human: error-type briefing card: every error type, example, fix, canary count
+    LLM->>TF: execute_replay(batch, canary)
+    TF-->>Human: PAUSE approval card: canary, 2 per error type
     Human->>TF: Approve
-    TF->>MCP: send canary (server caps it at 5)
-    LLM->>TF: find_existing_orders(canary): 1 charge each
+    TF->>MCP: server picks 2 messages from every error type and sends them
+    LLM->>TF: find_existing_orders per error type: 1 charge each
     LLM->>TF: execute_replay(batch, rest)
     TF-->>Human: PAUSE approval card: bulk replay
     Human->>TF: Approve
@@ -171,13 +171,14 @@ Safety is enforced **in the MCP server and the database**, not in the prompt.
 | `record_incident` | write, append-only | none: it only adds to the agent's memory, and the server computes the facts |
 | `stage_replay` | write, non-destructive | none: it only writes our own staging tables |
 | `park_messages` | write, non-destructive | none: it only adds data, and the DLT keeps its copy |
-| **`execute_replay`** | **destructive** | **human approval, every call** |
+| **`execute_replay`** | **destructive** | **human approval, every call** (canary: 2 per error type, then bulk) |
 | **`notify_owning_team`** | **destructive** (an email can't be unsent) | **human approval**: the card shows recipient team, subject and body |
 
 **Server-side rules, independent of what the model says:**
 - **Vetted fixes only.** The model picks a fix by name (`amount_string_to_number`, `epoch_millis_to_iso8601`) for a list of message IDs. The server applies it to the original payload, so **the model never writes the bytes that reach production**.
 - Every staged payload is **re-validated** against the consumer's contract, and the **orderId can't change**.
-- **Canary enforced by the server.** The first `execute_replay` on a batch sends at most 5. Further calls are **refused until every canary order is in the orders table**.
+- **Canary per error type, enforced by the server.** The first `execute_replay` on a batch sends **2 messages from every error type** (the server picks them, whatever the model asks), so every fix is proven before the bulk. Further calls are **refused until every canary order is in the orders table**.
+- **The developer sees every error type first.** `stage_replay` returns a per-error-type breakdown with a real before → after example of each fix; the agent shows it (plus the unfixable types) as a card before the canary approval.
 - **Duplicate check at stage time and again at send time.** Orders that were already processed are skipped.
 - The replay target topic is a constant, not a parameter.
 - **Email only to allow-listed teams.** The model picks a team name (`checkout-team`, `oncall`), never an address; the server builds the `parked-messages.csv` attachment itself; one email per batch.

@@ -29,7 +29,8 @@ public class ReplayService {
 
 	static final String PARK_TOPIC = DltReader.PARK_TOPIC;
 
-	static final int CANARY_SIZE = 5;
+	/** The canary sends this many messages from EVERY error type in the batch, so each fix is proven. */
+	static final int CANARY_PER_ERROR_TYPE = 2;
 
 	static final int MAX_STAGE_ITEMS = 500;
 
@@ -47,12 +48,26 @@ public class ReplayService {
 	public record Rejection(String messageId, String reason) {
 	}
 
+	/** A real message of this error type, before and after the server applied the vetted fix. */
+	public record Example(String messageId, String orderId, String before, String after) {
+	}
+
+	/** Everything a developer should know about one error type before the canary. */
+	public record ErrorTypePlan(String errorPattern, String fix, int staged, int skippedAlreadyProcessed, int inCanary,
+			Example example) {
+	}
+
 	public record StageResult(String status, String batchId, int staged, List<String> skippedAlreadyProcessed,
-			List<Rejection> rejected, List<String> samplePayloads, String nextStep) implements Outcome {
+			List<Rejection> rejected, List<ErrorTypePlan> errorTypes, int canarySize, String nextStep)
+			implements Outcome {
+	}
+
+	public record CanaryGroup(String errorPattern, String fix, List<String> orderIds) {
 	}
 
 	public record ExecuteResult(String status, String batchId, String phase, List<String> sent,
-			List<String> skippedAlreadyProcessed, int remaining, String message) implements Outcome {
+			List<String> skippedAlreadyProcessed, int remaining, List<CanaryGroup> canaryByErrorType, String message)
+			implements Outcome {
 	}
 
 	public record ParkResult(String status, int parked, List<Rejection> rejected) implements Outcome {
@@ -88,7 +103,7 @@ public class ReplayService {
 			}
 		}
 		if (items.isEmpty() || items.size() > MAX_STAGE_ITEMS) {
-			return new StageResult("REFUSED", null, 0, List.of(), rejected, List.of(),
+			return new StageResult("REFUSED", null, 0, List.of(), rejected, List.of(), 0,
 					"Stage between 1 and " + MAX_STAGE_ITEMS + " messages per batch.");
 		}
 		Map<String, DltMessage> dlt = dltById();
@@ -138,12 +153,12 @@ public class ReplayService {
 			}
 		});
 		if (accepted.isEmpty()) {
-			return new StageResult("REFUSED", null, 0, List.of(), rejected, List.of(), "Nothing valid to stage.");
+			return new StageResult("REFUSED", null, 0, List.of(), rejected, List.of(), 0, "Nothing valid to stage.");
 		}
 
 		Set<String> processed = existingOrderIds(accepted.keySet().stream().map(id -> dlt.get(id).key()).toList());
 		if (processed.size() == accepted.size()) {
-			return new StageResult("REFUSED", null, 0, List.copyOf(processed), rejected, List.of(),
+			return new StageResult("REFUSED", null, 0, List.copyOf(processed), rejected, List.of(), 0,
 					"All " + processed.size() + " orders are already processed; nothing to replay.");
 		}
 		String batchId = "b-" + UUID.randomUUID().toString().substring(0, 8);
@@ -153,28 +168,45 @@ public class ReplayService {
 			.param("n", accepted.size())
 			.update();
 		List<String> skipped = new ArrayList<>();
+		Map<String, int[]> counts = new LinkedHashMap<>(); // errorPattern -> {staged, skipped}
+		Map<String, Example> examples = new LinkedHashMap<>();
+		Map<String, String> fixOf = new LinkedHashMap<>();
 		accepted.forEach((messageId, payload) -> {
-			String orderId = dlt.get(messageId).key();
+			DltMessage original = dlt.get(messageId);
+			String orderId = original.key();
+			String pattern = original.errorPattern();
 			boolean alreadyProcessed = processed.contains(orderId);
 			if (alreadyProcessed) {
 				skipped.add(orderId);
 			}
+			int[] c = counts.computeIfAbsent(pattern, k -> new int[2]);
+			c[alreadyProcessed ? 1 : 0]++;
+			fixOf.putIfAbsent(pattern, items.get(messageId));
+			if (!alreadyProcessed) {
+				examples.putIfAbsent(pattern, new Example(messageId, orderId, original.value(), payload));
+			}
 			jdbc.sql("""
-					INSERT INTO dbo.replay_item (batch_id, message_id, order_id, fixed_payload, status)
-					VALUES (:batch, :msg, :order, :payload, :status)
+					INSERT INTO dbo.replay_item (batch_id, message_id, order_id, fixed_payload, status, error_pattern, fix)
+					VALUES (:batch, :msg, :order, :payload, :status, :pattern, :fix)
 					""")
 				.param("batch", batchId)
 				.param("msg", messageId)
 				.param("order", orderId)
 				.param("payload", payload)
 				.param("status", alreadyProcessed ? "SKIPPED_ALREADY_PROCESSED" : "STAGED")
+				.param("pattern", pattern)
+				.param("fix", items.get(messageId))
 				.update();
 		});
+		List<ErrorTypePlan> errorTypes = new ArrayList<>();
+		counts.forEach((pattern, c) -> errorTypes.add(new ErrorTypePlan(pattern, fixOf.get(pattern), c[0], c[1],
+				Math.min(CANARY_PER_ERROR_TYPE, c[0]), examples.get(pattern))));
+		int canarySize = errorTypes.stream().mapToInt(ErrorTypePlan::inCanary).sum();
 		int staged = accepted.size() - skipped.size();
-		return new StageResult("STAGED", batchId, staged, skipped, rejected,
-				accepted.values().stream().limit(2).toList(),
-				"Call execute_replay(batchId=" + batchId + ", maxCount=" + CANARY_SIZE
-						+ ") to send the canary. It requires human approval.");
+		return new StageResult("STAGED", batchId, staged, skipped, rejected, errorTypes, canarySize,
+				"Show the human every error type, then call execute_replay(batchId=" + batchId + ", maxCount=" + canarySize
+						+ ") to send the canary: " + CANARY_PER_ERROR_TYPE + " messages from each of the " + errorTypes.size()
+						+ " error types. It requires human approval.");
 	}
 
 	public ExecuteResult execute(String batchId, int maxCount) throws Exception {
@@ -190,8 +222,9 @@ public class ReplayService {
 		String phase;
 		int limit;
 		if (status.equals("STAGED")) {
+			// The server chooses the canary: N messages from every error type, whatever maxCount says.
 			phase = "CANARY";
-			limit = Math.min(Math.max(maxCount, 1), CANARY_SIZE);
+			limit = 0;
 		}
 		else {
 			List<String> canary = jdbc.sql("SELECT order_id FROM dbo.replay_item WHERE batch_id = :id AND status = 'SENT'")
@@ -207,19 +240,32 @@ public class ReplayService {
 			limit = Math.max(maxCount, 1);
 		}
 
-		List<Map<String, Object>> pending = jdbc.sql("""
-				SELECT TOP (:limit) message_id, order_id, fixed_payload FROM dbo.replay_item
-				WHERE batch_id = :id AND status = 'STAGED' ORDER BY message_id
+		List<Map<String, Object>> pending = phase.equals("CANARY") ? jdbc.sql("""
+				SELECT message_id, order_id, fixed_payload, error_pattern, fix FROM (
+				    SELECT message_id, order_id, fixed_payload, error_pattern, fix,
+				           ROW_NUMBER() OVER (PARTITION BY error_pattern ORDER BY message_id) AS rn
+				    FROM dbo.replay_item WHERE batch_id = :id AND status = 'STAGED') t
+				WHERE rn <= :perType ORDER BY error_pattern, message_id
 				""")
-			.param("limit", limit)
 			.param("id", batchId)
+			.param("perType", CANARY_PER_ERROR_TYPE)
 			.query()
-			.listOfRows();
+			.listOfRows()
+				: jdbc.sql("""
+						SELECT TOP (:limit) message_id, order_id, fixed_payload, error_pattern, fix FROM dbo.replay_item
+						WHERE batch_id = :id AND status = 'STAGED' ORDER BY message_id
+						""")
+					.param("limit", limit)
+					.param("id", batchId)
+					.query()
+					.listOfRows();
 		// Re-check at send time: the world may have changed since staging (e.g. a hotfix re-send).
 		Set<String> processedNow = existingOrderIds(pending.stream().map(r -> (String) r.get("order_id")).toList());
 
 		List<String> sent = new ArrayList<>();
 		List<String> skipped = new ArrayList<>();
+		Map<String, List<String>> canaryOrders = new LinkedHashMap<>();
+		Map<String, String> canaryFix = new LinkedHashMap<>();
 		for (Map<String, Object> row : pending) {
 			String messageId = (String) row.get("message_id");
 			String orderId = (String) row.get("order_id");
@@ -236,6 +282,9 @@ public class ReplayService {
 			kafka.send(out).get(10, TimeUnit.SECONDS);
 			markItem(batchId, messageId, "SENT");
 			sent.add(orderId);
+			String pattern = String.valueOf(row.get("error_pattern"));
+			canaryOrders.computeIfAbsent(pattern, k -> new ArrayList<>()).add(orderId);
+			canaryFix.putIfAbsent(pattern, String.valueOf(row.get("fix")));
 		}
 
 		int remaining = jdbc.sql("SELECT COUNT(*) FROM dbo.replay_item WHERE batch_id = :id AND status = 'STAGED'")
@@ -247,10 +296,15 @@ public class ReplayService {
 			.param("s", newStatus)
 			.param("id", batchId)
 			.update();
+		List<CanaryGroup> canaryByErrorType = new ArrayList<>();
+		if (phase.equals("CANARY")) {
+			canaryOrders.forEach((pattern, orders) -> canaryByErrorType.add(new CanaryGroup(pattern, canaryFix.get(pattern), orders)));
+		}
 		String message = phase.equals("CANARY")
-				? "Canary sent. Verify these orders appear exactly once (find_existing_orders) before replaying the rest."
+				? "Canary sent: " + sent.size() + " orders across " + canaryByErrorType.size()
+						+ " error types. Verify every one appears exactly once (find_existing_orders) before replaying the rest."
 				: (remaining == 0 ? "Batch completed." : remaining + " items still staged.");
-		return new ExecuteResult(newStatus, batchId, phase, sent, skipped, remaining, message);
+		return new ExecuteResult(newStatus, batchId, phase, sent, skipped, remaining, canaryByErrorType, message);
 	}
 
 	public ParkResult park(List<String> messageIds, String reason) throws Exception {
@@ -313,7 +367,7 @@ public class ReplayService {
 	}
 
 	private static ExecuteResult refused(String batchId, String why) {
-		return new ExecuteResult("REFUSED", batchId, null, List.of(), List.of(), -1, why);
+		return new ExecuteResult("REFUSED", batchId, null, List.of(), List.of(), -1, List.of(), why);
 	}
 
 	private static byte[] bytes(String s) {

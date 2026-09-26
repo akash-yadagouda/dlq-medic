@@ -2,14 +2,16 @@
 
 All numbers come from tool results or sandbox output. Render cards with Generative UI (a fenced ```openui block; call `get_openui_instructions` first if you have not yet).
 
-## 1. Plan card (step 6, before the first approval)
-One Card titled "Replay plan: <batchId>" containing, side by side:
-- a **donut PieChart** of the DLT messages by error pattern (label = short pattern name, value = count)
-- a **Table** with columns: Error pattern · Messages · Producer version · Action
+## 1. Error-type briefing (plan card, step 6b, before the first approval)
+One Card titled "Error types found: <batchId>", so the developer sees every kind of failure before anything is replayed:
+- a **donut PieChart** of the DLT messages by error type (label = short name, value = count)
+- a **Table** with one row per error type, including the unfixable ones, with columns:
+  Error type · Messages · Example (orderId: bad value → fixed value) · Action · In canary
 
-Action is one of: `replay via <fix name>`, `skip: already processed (<n>)`, `park: <reason>`.
+Action is one of: `replay via <fix name>`, `park: <reason>`. Add one more row "Already processed" with its count and action `skip (would double-charge)`.
+Take the fixable rows, their examples and canary counts from stage_replay `errorTypes`; take the unfixable rows from your sandbox classification (canary 0).
 If recall_similar_incidents found a match, add a "Seen before" line: incident id, date, similarity and what happened.
-Below it, one line of text: "Next: a 5-message canary needs your approval; the rest waits until the canary is verified."
+Below it, one line: "Next: a canary of <canarySize> orders (2 from each fixable error type) needs your approval; the rest waits until every error type's canary is verified."
 
 ## 2. Outcome card (step 11)
 One Card titled "Incident resolved: orders.DLT" with a row of KPI tiles:
@@ -32,7 +34,7 @@ Write both files in the sandbox, then list them in a ```sandbox_artifacts block.
 | Parked for the owning team | |
 | Rejected at staging | |
 
-4. **Safety checks:** canary orderIds with their charge counts, and the double-charge result
+4. **Safety checks:** the canary per error type (orderIds and charge counts), and the double-charge result
 5. **Timeline:** one line per step (assess, classify, stage, canary approved, canary verified, bulk approved, parked, team emailed)
 6. **Recommendation:** one change that would prevent a repeat (for example a contract test in the producer's CI)
 

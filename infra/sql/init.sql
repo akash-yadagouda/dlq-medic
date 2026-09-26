@@ -52,8 +52,12 @@ CREATE TABLE dbo.replay_item (
     fixed_payload NVARCHAR(MAX) NOT NULL,
     status        VARCHAR(30)   NOT NULL,  -- STAGED | SENT | SKIPPED_ALREADY_PROCESSED
     sent_at       DATETIME2     NULL,
+    error_pattern NVARCHAR(300) NULL,      -- canonical error type, so the canary covers every type
+    fix           VARCHAR(60)   NULL,      -- vetted fix applied
     PRIMARY KEY (batch_id, message_id)
 );
+IF COL_LENGTH('dbo.replay_item', 'error_pattern') IS NULL ALTER TABLE dbo.replay_item ADD error_pattern NVARCHAR(300) NULL;
+IF COL_LENGTH('dbo.replay_item', 'fix') IS NULL ALTER TABLE dbo.replay_item ADD fix VARCHAR(60) NULL;
 
 IF OBJECT_ID('dbo.agent_audit_log') IS NULL
 CREATE TABLE dbo.agent_audit_log (
