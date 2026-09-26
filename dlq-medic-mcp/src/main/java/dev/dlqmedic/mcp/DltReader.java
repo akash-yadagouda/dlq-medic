@@ -5,6 +5,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -49,13 +50,26 @@ public class DltReader {
 		return messages;
 	}
 
+	/** One parked message, as park_messages wrote it to orders.parked. */
+	public record Parked(String messageId, String orderId, String error, String producerVersion, String reason) {
+	}
+
+	/** Parked messages, one per DLT messageId (a repeated park never produces two rows). */
+	public List<Parked> parkedMessages() {
+		Map<String, Parked> byId = new LinkedHashMap<>();
+		for (ConsumerRecord<String, String> r : readTopic(PARK_TOPIC)) {
+			String messageId = header(r, PARKED_FROM_HEADER);
+			if (messageId != null) {
+				byId.putIfAbsent(messageId, new Parked(messageId, r.key(), header(r, "x-dlt-error"),
+						header(r, "producer-version"), header(r, "x-parked-reason")));
+			}
+		}
+		return List.copyOf(byId.values());
+	}
+
 	/** DLT messageIds that have already been parked. */
 	public Set<String> parkedMessageIds() {
-		return readTopic(PARK_TOPIC).stream()
-			.map(r -> r.headers().lastHeader(PARKED_FROM_HEADER))
-			.filter(h -> h != null)
-			.map(DltReader::text)
-			.collect(Collectors.toSet());
+		return parkedMessages().stream().map(Parked::messageId).collect(Collectors.toSet());
 	}
 
 	private List<ConsumerRecord<String, String>> readTopic(String topic) {
@@ -87,8 +101,9 @@ public class DltReader {
 		}
 	}
 
-	private static String text(Header header) {
-		return new String(header.value(), StandardCharsets.UTF_8);
+	private static String header(ConsumerRecord<?, ?> record, String name) {
+		Header header = record.headers().lastHeader(name);
+		return header == null ? null : new String(header.value(), StandardCharsets.UTF_8);
 	}
 
 }

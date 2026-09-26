@@ -39,17 +39,20 @@ public class DlqMedicTools {
 
 	private final IncidentMemory memory;
 
+	private final TeamNotifier notifier;
+
 	private final AuditLog audit;
 
 	private final JdbcClient jdbc;
 
 	public DlqMedicTools(PipelineHealth health, DltReader dltReader, HandledMessages handled, ReplayService replay,
-			IncidentMemory memory, AuditLog audit, JdbcClient jdbc) {
+			IncidentMemory memory, TeamNotifier notifier, AuditLog audit, JdbcClient jdbc) {
 		this.health = health;
 		this.dltReader = dltReader;
 		this.handled = handled;
 		this.replay = replay;
 		this.memory = memory;
+		this.notifier = notifier;
 		this.audit = audit;
 		this.jdbc = jdbc;
 	}
@@ -158,6 +161,23 @@ public class DlqMedicTools {
 			@McpToolParam(description = "Why they cannot be replayed, for the owning team") String reason) throws Exception {
 		return audited("park_messages", Map.of("count", messageIds.size(), "reason", String.valueOf(reason)),
 				() -> replay.park(messageIds, reason));
+	}
+
+	@McpTool(name = "notify_owning_team", description = """
+			Emails the team that owns the failing producer (IRREVERSIBLE: an email cannot be unsent; requires \
+			human approval). Choose a team from the server's allowlist; you cannot address anyone else. Write a \
+			short subject and a plain-text body: root cause, counts (replayed, skipped, parked), what the team must \
+			do, and one recommendation. The server attaches parked-messages.csv built from orders.parked itself. \
+			One email per replay batch.""",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = false, destructiveHint = true,
+					idempotentHint = false, openWorldHint = true))
+	public TeamNotifier.NotifyResult notifyOwningTeam(
+			@McpToolParam(description = "Allow-listed team, e.g. checkout-team or oncall") String team,
+			@McpToolParam(description = "Email subject (max 200 characters)") String subject,
+			@McpToolParam(description = "Plain-text email body") String body,
+			@McpToolParam(description = "Replay batch id of this incident", required = false) String batchId) throws Exception {
+		return audited("notify_owning_team", Map.of("team", String.valueOf(team), "subject", String.valueOf(subject),
+				"batchId", String.valueOf(batchId)), () -> notifier.notify(team, subject, body, batchId));
 	}
 
 	@McpTool(name = "recall_similar_incidents", description = """

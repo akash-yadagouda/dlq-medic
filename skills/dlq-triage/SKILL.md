@@ -32,6 +32,7 @@ Code Mode can call **read-only** tools only (get_pipeline_health, peek_dlt, find
 8. **Verify the canary.** Call find_existing_orders for the canary orderIds. Every one must exist with exactly 1 charge. If not, stop and report.
 9. **Replay the rest.** Call execute_replay(batchId, <remaining count>). This pauses for human approval.
 10. **Park.** Call park_messages for the unfixable messages with a reason the owning team can act on.
+10b. **Notify the owning team.** Call notify_owning_team with team `checkout-team`, the batchId, a short subject and a plain-text body: root cause (producer version and what changed), counts (replayed, skipped, parked), what the team must do with the parked orders, and one recommendation. This pauses for human approval; if denied, rewrite it following the human's reason. The server attaches parked-messages.csv.
 11. **Report.** Render the **outcome card**, write the **incident files** and list them for download, all as described in `references/report-template.md`.
 12. **Remember.** Call record_incident with the batchId, the patterns (exact errorPattern values from peek_dlt, with count and action), the root cause, every approval or denial the human gave (with reasons), and 1-2 lessons that would make the next similar incident faster or safer. The server adds the verified facts.
 

@@ -78,6 +78,18 @@ CREATE TABLE dbo.incident_memory (
     human_decisions   NVARCHAR(2000) NULL,
     lessons           NVARCHAR(2000) NULL
 );
+
+-- Emails the agent sent (after human approval). One per replay batch.
+IF OBJECT_ID('dbo.notification_log') IS NULL
+CREATE TABLE dbo.notification_log (
+    notification_id BIGINT IDENTITY PRIMARY KEY,
+    sent_at         DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME(),
+    batch_id        VARCHAR(40)   NULL,
+    team            VARCHAR(60)   NOT NULL,
+    recipient       VARCHAR(200)  NOT NULL,
+    subject         NVARCHAR(200) NOT NULL,
+    parked_rows     INT           NOT NULL
+);
 GO
 
 -- ── Least-privilege identities ────────────────────────────────────────────
@@ -110,6 +122,8 @@ GRANT SELECT, INSERT         ON dbo.agent_audit_log TO dlq_medic;
 DENY  UPDATE, DELETE         ON dbo.agent_audit_log TO dlq_medic;
 GRANT SELECT, INSERT         ON dbo.incident_memory TO dlq_medic;
 DENY  UPDATE, DELETE         ON dbo.incident_memory TO dlq_medic;
+GRANT SELECT, INSERT         ON dbo.notification_log TO dlq_medic;
+DENY  UPDATE, DELETE         ON dbo.notification_log TO dlq_medic;
 DENY  INSERT, UPDATE, DELETE ON dbo.orders          TO dlq_medic;
 DENY  INSERT, UPDATE, DELETE ON dbo.payment_ledger  TO dlq_medic;
 GO

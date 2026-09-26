@@ -28,7 +28,8 @@ echo "3/4 truncating tables"
 docker exec -e P="$MSSQL_SA_PASSWORD" sqlserver bash -c '/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$P" -C -b -d orders_db -Q "
   SET NOCOUNT ON;
   DELETE dbo.replay_item; DELETE dbo.replay_batch;
-  TRUNCATE TABLE dbo.orders; TRUNCATE TABLE dbo.payment_ledger; TRUNCATE TABLE dbo.agent_audit_log;"'
+  TRUNCATE TABLE dbo.orders; TRUNCATE TABLE dbo.payment_ledger; TRUNCATE TABLE dbo.agent_audit_log;
+  TRUNCATE TABLE dbo.notification_log;"'
 if [[ "${1:-}" == "--forget" ]]; then
   docker exec -e P="$MSSQL_SA_PASSWORD" sqlserver bash -c '/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$P" -C -b -d orders_db -Q "SET NOCOUNT ON; TRUNCATE TABLE dbo.incident_memory;"'
   echo "    incident memory wiped (--forget)"

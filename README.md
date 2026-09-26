@@ -38,6 +38,7 @@ Result on the seeded incident: **186 replayed, 12 skipped as already processed, 
 | **Schedules** | An hourly `dlt-watch` runs unattended: "All clear" when nothing is new, a full triage waiting at the approval card when something is |
 | **Generative UI** | A plan card (donut + action table) before the first approval, and an outcome card with KPI tiles at the end |
 | **Sandbox file downloads** | `incident-report.md` and `parked-messages.csv` handed to the human |
+| **Approval on a real side effect** | `notify_owning_team` emails the owning team only after the human reads and approves the draft (Mailpit catches it locally) |
 | **Sessions API** | `scripts/run-agent.py` triggers the agent headlessly (as an alert would) and reports tokens and cost |
 
 ## Architecture: the harness we built on TrueForge
@@ -73,7 +74,7 @@ flowchart TB
 
     subgraph MCP["④ dlq-medic MCP server · Java / Spring AI · holds the DB + Kafka credentials"]
         direction LR
-        TOOLS["9 annotated tools<br/>read-only · write · destructive"]
+        TOOLS["10 annotated tools<br/>read-only · write · destructive"]
         GUARD["Guardrails<br/>vetted fixes · canary gate<br/>duplicate checks · audit log"]
         MEM["Incident memory<br/>recall + record"]
     end
@@ -83,6 +84,7 @@ flowchart TB
         OC["order-consumer<br/>Spring Boot"]
         K[("Kafka<br/>orders · orders.DLT · orders.parked")]
         DB[("SQL Server<br/>least-privilege login")]
+        MAIL[("Mailpit SMTP<br/>owning team inbox")]
     end
 
     TRIG --> LOOP
@@ -104,6 +106,7 @@ flowchart TB
     GUARD --> K
     GUARD --> DB
     MEM --> DB
+    GUARD -->|"email after approval"| MAIL
     OC --> K
     OC --> DB
 ```
@@ -142,7 +145,11 @@ sequenceDiagram
     TF-->>Human: PAUSE approval card: bulk replay
     Human->>TF: Approve
     TF->>MCP: bulk refused unless the canary landed
-    LLM->>TF: park_messages, record_incident
+    LLM->>TF: park_messages, then notify_owning_team(checkout-team, draft)
+    TF-->>Human: PAUSE approval card: email draft
+    Human->>TF: Approve
+    TF->>MCP: send email (allow-listed team, server-built CSV attached)
+    LLM->>TF: record_incident
     TF-->>Human: outcome card + incident-report.md + parked-messages.csv
 ```
 
@@ -165,6 +172,7 @@ Safety is enforced **in the MCP server and the database**, not in the prompt.
 | `stage_replay` | write, non-destructive | none: it only writes our own staging tables |
 | `park_messages` | write, non-destructive | none: it only adds data, and the DLT keeps its copy |
 | **`execute_replay`** | **destructive** | **human approval, every call** |
+| **`notify_owning_team`** | **destructive** (an email can't be unsent) | **human approval**: the card shows recipient team, subject and body |
 
 **Server-side rules, independent of what the model says:**
 - **Vetted fixes only.** The model picks a fix by name (`amount_string_to_number`, `epoch_millis_to_iso8601`) for a list of message IDs. The server applies it to the original payload, so **the model never writes the bytes that reach production**.
@@ -172,6 +180,7 @@ Safety is enforced **in the MCP server and the database**, not in the prompt.
 - **Canary enforced by the server.** The first `execute_replay` on a batch sends at most 5. Further calls are **refused until every canary order is in the orders table**.
 - **Duplicate check at stage time and again at send time.** Orders that were already processed are skipped.
 - The replay target topic is a constant, not a parameter.
+- **Email only to allow-listed teams.** The model picks a team name (`checkout-team`, `oncall`), never an address; the server builds the `parked-messages.csv` attachment itself; one email per batch.
 - **Not exposed at all:** delete topic, reset offsets, raw produce, arbitrary SQL.
 
 **The database backs this up (SQL Server least privilege):**
@@ -196,7 +205,7 @@ Safety is enforced **in the MCP server and the database**, not in the prompt.
 **1. Infrastructure and the incident**
 ```bash
 ./scripts/init-env.sh        # generates local-only DB passwords into .env (gitignored)
-docker compose up -d         # Kafka + SQL Server; creates topics, schema and least-privilege logins
+docker compose up -d         # Kafka + SQL Server + Mailpit; creates topics, schema and least-privilege logins
 ./scripts/reset-demo.sh      # publishes the incident: 500 healthy + 214 broken + 12 hotfix re-sends
 ```
 
@@ -226,6 +235,8 @@ MODEL=openai/gpt-5-6-terra ./scripts/create-agent.sh   # registers the MCP serve
   ```bash
   python3 scripts/run-agent.py --msg "orders.DLT is filling up. Sort it out." --on-approval ask
   ```
+
+**See the emails** the agent sends (after your approval) at http://localhost:8025 (Mailpit web inbox).
 
 **Reset between runs:** stop `order-consumer`, run `./scripts/reset-demo.sh`, then start it again.
 

@@ -33,7 +33,7 @@ Write both files in the sandbox, then list them in a ```sandbox_artifacts block.
 | Rejected at staging | |
 
 4. **Safety checks:** canary orderIds with their charge counts, and the double-charge result
-5. **Timeline:** one line per step (assess, classify, stage, canary approved, canary verified, bulk approved, parked)
+5. **Timeline:** one line per step (assess, classify, stage, canary approved, canary verified, bulk approved, parked, team emailed)
 6. **Recommendation:** one change that would prevent a repeat (for example a contract test in the producer's CI)
 
 **/tmp/dlq-medic/parked-messages.csv**: the handoff for the owning team.

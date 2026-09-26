@@ -280,6 +280,7 @@ public class ReplayService {
 			out.headers().add("x-parked-reason", bytes(reason));
 			out.headers().add(DltReader.PARKED_FROM_HEADER, bytes(messageId));
 			out.headers().add("x-dlt-error", bytes(String.valueOf(original.error())));
+			out.headers().add("producer-version", bytes(String.valueOf(original.producerVersion())));
 			kafka.send(out).get(10, TimeUnit.SECONDS);
 			parked++;
 		}
